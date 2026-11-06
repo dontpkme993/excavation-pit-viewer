@@ -1,0 +1,10 @@
+node_modules
+dist
+
+# 資料檔不進版控：網頁只從 Google 試算表動態讀取
+# 原始資料存放於專案外：../excavation-data/
+*.xlsx
+*.xls
+*.csv
+public/data/
+點位.jpg

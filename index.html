@@ -1,0 +1,93 @@
+<!doctype html>
+<html lang="zh-Hant">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>探坑挖掘紀錄</title>
+  </head>
+  <body>
+    <aside id="sidebar">
+      <header>
+        <h1 id="pit-title">探坑挖掘紀錄</h1>
+        <p id="pit-meta" class="muted"></p>
+      </header>
+
+      <section id="source-section">
+        <h2>資料來源</h2>
+        <form id="sheet-form" class="sheet-form">
+          <input id="sheet-input" type="text" placeholder="貼上 Google 試算表網址" autocomplete="off" />
+          <button type="submit">載入</button>
+        </form>
+        <p class="muted small" id="source-info"></p>
+        <p class="muted small" id="source-status" hidden></p>
+        <div class="source-actions">
+          <button id="sheet-refresh" type="button" hidden>重新讀取試算表</button>
+          <button id="sheet-forget" type="button" hidden title="清除此瀏覽器記住的試算表網址（公用電腦使用後建議清除）">忘記此試算表</button>
+          <label class="file-btn">
+            載入本機 xlsx
+            <input id="file-input" type="file" accept=".xlsx,.xls" hidden />
+          </label>
+        </div>
+        <ul id="warnings" class="warnings" hidden></ul>
+      </section>
+
+      <section id="groups-section" class="needs-data">
+        <h2>基準（資料群組）</h2>
+        <ul id="group-list"></ul>
+        <p class="muted small">深度＝讀值 − 基準面高於地表的高度，各基準換算到同一個地表後一起呈現。右側數值可臨時試算，不會寫回試算表。</p>
+        <p id="skipped-note" class="muted small" hidden></p>
+      </section>
+
+      <section class="needs-data">
+        <h2>紀錄（依試算表順序）</h2>
+        <ol id="record-list"></ol>
+      </section>
+
+      <section id="detail" hidden>
+        <h2>點位深度（cm）</h2>
+        <table id="point-table"></table>
+        <div id="record-info" class="record-info" hidden></div>
+        <p class="muted small">藍色：量測值；大字為目前「數值標示」選的數值，小字為另一種。距地表＝讀值 − 基準高於地表的高度。灰色「≈」：該點未量測，由同半邊鄰近點位推估。「補」為補充點位（如 9+）。</p>
+      </section>
+
+      <section>
+        <h2>顯示</h2>
+        <label class="row"><input id="opt-datum" type="checkbox" checked /> 基準面</label>
+        <label class="row"><input id="opt-labels" type="checkbox" checked /> 點位標籤</label>
+        <label class="row"><input id="opt-ghosts" type="checkbox" /> 其他層位（線框，依群組著色）</label>
+        <label class="row">
+          數值標示
+          <select id="opt-value">
+            <option value="raw">原始讀值（對照原表）</option>
+            <option value="ground">距地表（換算後）</option>
+            <option value="both">兩者：讀值 → 距地表</option>
+          </select>
+        </label>
+        <label class="row">
+          著色
+          <select id="opt-color">
+            <option value="depth">依深度</option>
+            <option value="group">依資料群組</option>
+          </select>
+        </label>
+        <label class="row">
+          垂直誇張
+          <input id="opt-exag" type="range" min="1" max="4" step="0.5" value="1" />
+          <span id="exag-val">1×</span>
+        </label>
+        <div class="legend" id="legend-depth">
+          <div id="legend-bar"></div>
+          <div class="legend-ticks"><span id="legend-min"></span><span id="legend-max"></span></div>
+        </div>
+        <button id="reset-view" type="button">重設視角</button>
+      </section>
+    </aside>
+
+    <main id="viewport">
+      <div id="hint" class="muted">請在左側「資料來源」貼上 Google 試算表網址</div>
+      <div id="error" hidden></div>
+    </main>
+
+    <script type="module" src="/src/main.js"></script>
+  </body>
+</html>
