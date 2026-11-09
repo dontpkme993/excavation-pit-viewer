@@ -1,7 +1,7 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { CSS2DRenderer, CSS2DObject } from 'three/addons/renderers/CSS2DRenderer.js';
-import { QUADS, composeView, resolveView, depthAt } from './data.js';
+import { QUADS, composeView, resolveView, depthAt, hasSurface } from './data.js';
 
 const SEG = 24; // 每個象限的網格細分數
 const HALF = 100; // 探坑半寬（cm）
@@ -98,7 +98,7 @@ export class PitScene {
     this.rebuild();
   }
 
-  /** 顯示第 i 筆紀錄（另一半邊沿用前一筆） */
+  /** 顯示第 i 筆紀錄 */
   showRecord(i) {
     this.currentIndex = i;
     this.rebuild();
@@ -129,9 +129,10 @@ export class PitScene {
       this.layerGroup.add(this.buildExtraMarkers(resolved));
       for (const half of ['ab', 'cd']) {
         if (resolved[half].knownCount) continue;
-        const nodes = resolved[half].nodes;
-        const l = label('此半邊無量測（推估）', 'lbl lbl-warn');
-        l.position.copy(toWorld(half === 'ab' ? 50 : -50, 0, nodes['13'].v, this.options.exag));
+        const depth = resolved[half].nodes['13'].v;
+        const drawn = depth != null;
+        const l = label(drawn ? '此半邊無量測（沿用上方紀錄）' : '此半邊無量測', 'lbl lbl-warn');
+        l.position.copy(toWorld(half === 'ab' ? 50 : -50, 0, depth ?? 0, this.options.exag));
         this.layerGroup.add(l);
       }
     }
@@ -248,9 +249,10 @@ export class PitScene {
     const tint = (t, out) =>
       byGroup ? out.copy(gc).lerp(t < 0.5 ? white : black, Math.abs(t - 0.5) * 0.9) : rampColor(t, out);
     for (const quad of QUADS) {
+      if (!hasSurface(resolved[quad.half], quad)) continue;
       const nodes = resolved[quad.half].nodes;
-      // 整個半邊都沒有量測值時，以灰階呈現（僅為推估）
-      const unmeasured = !ghost && resolved[quad.half].knownCount === 0;
+      // 整個象限都沿用上方紀錄時，以灰階呈現
+      const unmeasured = !ghost && [...quad.corners, quad.center].every((id) => !nodes[id].measured);
       const base = positions.length / 3;
       for (let j = 0; j <= seg; j++) {
         for (let i = 0; i <= seg; i++) {
@@ -279,27 +281,25 @@ export class PitScene {
 
     // 中線 x=0 上 ab 與 cd 之間的高低差立面
     if (!ghost) {
-      const edge = (half, n) => {
-        const quad = QUADS.find((q) => q.half === half && n >= q.n[0] && n <= q.n[1]);
-        const s = half === 'ab' ? 0 : 1;
-        const t = (n - quad.n[0]) / (quad.n[1] - quad.n[0]);
-        return depthAt(resolved[half], quad, s, t);
-      };
-      const steps = SEG * 2;
-      const base = positions.length / 3;
-      for (let k = 0; k <= steps; k++) {
-        const n = -HALF + (2 * HALF * k) / steps;
-        for (const half of ['ab', 'cd']) {
-          const depth = edge(half, n);
-          const p = toWorld(0, n, depth, ex);
-          positions.push(p.x, p.y, p.z);
-          tint((depth - d0) / (d1 - d0), c).multiplyScalar(0.7);
-          colors.push(c.r, c.g, c.b);
+      // 南北各一段，兩側象限都有曲面才畫
+      for (const [n0, n1] of [[-HALF, 0], [0, HALF]]) {
+        const sides = ['ab', 'cd'].map((half) => ({ half, quad: QUADS.find((q) => q.half === half && q.n[0] === n0) }));
+        if (!sides.every(({ half, quad }) => hasSurface(resolved[half], quad))) continue;
+        const base = positions.length / 3;
+        for (let k = 0; k <= SEG; k++) {
+          const t = k / SEG;
+          for (const { half, quad } of sides) {
+            const depth = depthAt(resolved[half], quad, half === 'ab' ? 0 : 1, t);
+            const p = toWorld(0, n0 + (n1 - n0) * t, depth, ex);
+            positions.push(p.x, p.y, p.z);
+            tint((depth - d0) / (d1 - d0), c).multiplyScalar(0.7);
+            colors.push(c.r, c.g, c.b);
+          }
         }
-      }
-      for (let k = 0; k < steps; k++) {
-        const a = base + k * 2;
-        index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+        for (let k = 0; k < SEG; k++) {
+          const a = base + k * 2;
+          index.push(a, a + 1, a + 2, a + 1, a + 3, a + 2);
+        }
       }
     }
 
@@ -343,7 +343,7 @@ export class PitScene {
       if (Math.abs(quad.x[0]) === HALF) edges.push({ quad, fixed: 's', val: 0 });
     }
     for (const { quad, fixed, val } of edges) {
-      const nodes = resolved[quad.half].nodes;
+      if (!hasSurface(resolved[quad.half], quad)) continue;
       const base = positions.length / 3;
       for (let k = 0; k <= SEG; k++) {
         const u = k / SEG;
@@ -373,22 +373,19 @@ export class PitScene {
 
   /* ---------- 點位標記 ---------- */
   /**
-   * 點位數值標示文字。depth = 距地表深度；raw = 原始讀值（量測點才有，原樣顯示以便對照原表）。
-   * 推估點沒有讀值，以 ≈ 標示，讀值模式下為「推估深度 + 基準高度」。
+   * 點位數值標示文字。depth = 距地表深度；raw = 原始讀值（原樣顯示以便對照原表）。
+   * 沿用上方紀錄的點以 ↑ 標示，讀值為來源紀錄的原始讀值。
    */
-  valueText(depth, raw) {
-    const h = this.dataset.groups[this.current.group].datumHeight;
-    const est = raw == null;
+  valueText(depth, raw, inherited = false) {
     const g = depth.toFixed(1);
-    const r = est ? (depth + h).toFixed(1) : String(raw);
-    const pre = est ? '≈' : '';
+    const r = String(raw);
+    const pre = inherited ? '↑' : '';
     if (this.options.valueMode === 'ground') return pre + g;
     if (this.options.valueMode === 'both') return `${pre}${r} → ${g}`;
     return pre + r;
   }
 
   buildMarkers(resolved) {
-    const rec = this.current.rec;
     const ex = this.options.exag;
     const g = new THREE.Group();
     const sphere = new THREE.SphereGeometry(2.4, 16, 12);
@@ -398,6 +395,7 @@ export class PitScene {
 
     for (const half of ['ab', 'cd']) {
       for (const node of Object.values(resolved[half].nodes)) {
+        if (node.v == null) continue; // 上方也沒有紀錄
         // 分裂點位稍微往各自半邊偏移，讓兩個標記可分辨
         const off = node.key !== node.id ? (half === 'ab' ? 3 : -3) : 0;
         const p = toWorld(node.x + off, node.n, node.v, ex);
@@ -408,7 +406,7 @@ export class PitScene {
           g.add(new THREE.Line(new THREE.BufferGeometry().setFromPoints([toWorld(node.x + off, node.n, 0, ex), p]), stemMat));
         }
         if (this.options.labels) {
-          const text = `${node.key}  ${this.valueText(node.v, node.measured ? rec.raw[node.key] ?? rec.raw[node.id] : null)}`;
+          const text = `${node.key}  ${this.valueText(node.v, node.raw, !node.measured)}`;
           const l = label(text, `lbl lbl-pt ${node.measured ? '' : 'interp'} ${off > 0 ? 'right' : off < 0 ? 'left' : ''}`);
           l.position.copy(p);
           l.center.set(off < 0 ? 1.05 : off > 0 ? -0.05 : 0.5, 1.3);

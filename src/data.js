@@ -310,10 +310,10 @@ function parseLegacy(wb) {
 /** 第 i 筆紀錄的繪圖資料（一列即一個完整平面） */
 export function composeView(ds, i) {
   const rec = ds.records[i];
-  return { rec, values: rec.values, group: rec.group, points: ds.points };
+  return { rec, values: rec.values, group: rec.group, points: ds.points, records: ds.records, index: i };
 }
 
-/* ---------------- 幾何與插值 ----------------
+/* ---------------- 幾何 ----------------
  * 平面座標：x 向右（東）、n 向上（北），單位 cm，探坑中心為原點，範圍 -100 ~ 100。
  *
  *   7----8----1
@@ -369,51 +369,50 @@ function lookupKey(values, id, half) {
   return values[id] != null ? id : null;
 }
 
-function idw(x, n, known) {
-  let sw = 0;
-  let sv = 0;
-  for (const k of known) {
-    const d2 = (k.x - x) ** 2 + (k.n - n) ** 2;
-    if (d2 < 1e-6) return k.v;
-    const w = 1 / d2;
-    sw += w;
-    sv += w * k.v;
+/** 往上找此點位最後一筆有紀錄的值；找不到回傳 null */
+function inheritedValue(view, id, half) {
+  for (let j = view.index - 1; j >= 0; j--) {
+    const rec = view.records[j];
+    const key = lookupKey(rec.values, id, half);
+    if (key) return { v: rec.values[key], raw: rec.raw[key], from: rec.id };
   }
-  return sv / sw;
+  return null;
+}
+
+/** 象限的四角與中心是否都有高度（本筆或沿用）；缺任一點就不繪製該象限 */
+export function hasSurface(halfRes, quad) {
+  return [...quad.corners, quad.center].every((id) => halfRes.nodes[id].v != null);
 }
 
 /**
  * 解出一個畫面（composeView 的結果）在兩個半邊的節點深度。
- * 節點狀態：measured（本筆量測），否則為插值。
- * 缺值以同一半邊有值的點位（含補充點位）做反距離加權插值；整個半邊都沒值時改用全部有值點位。
- * 補充點位（例如 9+）有值時，以局部隆起修正曲面，使曲面通過該點，且不影響其他點位。
+ * measured = 本筆量測；否則逐點往上沿用最後一筆有紀錄的值（from = 來源 record_id），一律不推估。
+ * 沿用的是距地表深度，因此跨基準時位置仍正確；上方都沒有紀錄時 v = null。
+ * 補充點位（例如 9+）只用本筆讀值，有值時以局部隆起修正曲面，使曲面通過該點，且不影響其他點位。
  */
 export function resolveView(view) {
   const points = view.points ?? {};
   const extraPts = Object.values(points).filter((p) => p.active && !isStandardKey(p.key.toLowerCase()));
-  const all = [];
-  for (const [key, v] of Object.entries(view.values)) {
-    const id = key.replace(/(ab|cd)$/, '');
-    if (POINTS[id]) all.push({ x: POINTS[id][0], n: POINTS[id][1], v });
-    else if (points[key]?.active) all.push({ x: points[key].x, n: points[key].n, v });
-  }
 
   const result = {};
   for (const half of ['ab', 'cd']) {
     const nodes = {};
-    const known = [];
+    let knownCount = 0;
     for (const id of HALVES[half].ids) {
       const key = lookupKey(view.values, id, half);
-      const v = key ? view.values[key] : null;
+      const own = key ? { v: view.values[key], raw: view.rec.raw[key], from: null } : null;
+      const src = own ?? inheritedValue(view, id, half);
       const [x, n] = POINTS[id];
-      if (v != null) known.push({ x, n, v });
+      if (own) knownCount++;
       nodes[id] = {
         id,
         key: nodeKey(id, half),
         x,
         n,
-        v,
-        measured: v != null,
+        v: src?.v ?? null,
+        raw: src?.raw ?? null,
+        from: src?.from ?? null,
+        measured: !!own,
       };
     }
     // 本半邊的補充點位
@@ -422,20 +421,16 @@ export function resolveView(view) {
       if (p.side !== HALVES[half].side) continue;
       const k = p.key.toLowerCase();
       const v = view.values[k];
-      if (v != null) known.push({ x: p.x, n: p.n, v });
+      if (v != null) knownCount++;
       extras.push({ key: p.key, x: p.x, n: p.n, v, measured: v != null });
-    }
-    const source = known.length ? known : all;
-    for (const node of Object.values(nodes)) {
-      if (node.v == null) node.v = source.length ? idw(node.x, node.n, source) : 0;
     }
 
     // 補充點位的局部修正：半徑取到最近的其他點位與中線的距離，因此在其他點位上修正量為 0
-    const res = { nodes, knownCount: known.length, extras, bumps: [] };
+    const res = { nodes, knownCount, extras, bumps: [] };
     for (const e of extras) {
       if (e.v == null) continue;
       const quad = QUADS.find((q) => q.half === half && e.x >= q.x[0] && e.x <= q.x[1] && e.n >= q.n[0] && e.n <= q.n[1]);
-      if (!quad) continue;
+      if (!quad || !hasSurface(res, quad)) continue;
       let R = Math.abs(e.x);
       for (const [x, n] of Object.values(POINTS)) R = Math.min(R, Math.hypot(x - e.x, n - e.n));
       for (const o of extras) if (o !== e) R = Math.min(R, Math.hypot(o.x - e.x, o.n - e.n));

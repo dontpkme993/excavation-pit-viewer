@@ -228,11 +228,10 @@ function select(i) {
 }
 
 /* ---------------- 點位表 ---------------- */
-/** 點位表儲存格：主要數值依「數值標示」模式，另一種數值以小字附註；推估點以 ≈ 標示 */
-function cellText(depth, raw, h) {
-  const est = raw == null;
-  const pre = est ? '≈' : '';
-  const r = est ? (depth + h).toFixed(1) : String(raw);
+/** 點位表儲存格：主要數值依「數值標示」模式，另一種數值以小字附註；沿用上方紀錄的點以 ↑ 標示 */
+function cellText(depth, raw, inherited = false) {
+  const pre = inherited ? '↑' : '';
+  const r = String(raw);
   const g = depth.toFixed(1);
   if (pit.options.valueMode === 'ground') return `${pre}${g}<span class="raw">讀值 ${pre}${r}</span>`;
   return `${pre}${r}<span class="raw">距地表 ${pre}${g}</span>`;
@@ -240,7 +239,6 @@ function cellText(depth, raw, h) {
 
 function renderTable(view) {
   const { rec } = view;
-  const h = dataset.groups[rec.group].datumHeight;
   const resolved = resolveView(view);
   const rows = [];
   for (const half of ['ab', 'cd']) {
@@ -248,18 +246,17 @@ function renderTable(view) {
     const cells = Object.values(nodes)
       .sort((a, b) => +a.id - +b.id)
       .map((n) => {
-        if (n.measured) {
-          return `<td class="m"><b>${n.key}</b>${cellText(n.v, rec.raw[n.key] ?? rec.raw[n.id], h)}</td>`;
-        }
-        return `<td class="i"><b>${n.key}</b>${cellText(n.v, null, h)}</td>`;
+        if (n.measured) return `<td class="m"><b>${n.key}</b>${cellText(n.v, n.raw)}</td>`;
+        if (n.v == null) return `<td class="i"><b>${n.key}</b>—</td>`;
+        return `<td class="i"><b>${n.key}</b>${cellText(n.v, n.raw, true)}<span class="raw">沿用 ${esc(n.from)}</span></td>`;
       });
-    // 補充點位（如 9+）：沒有讀值時不推估，只顯示「—」
+    // 補充點位（如 9+）：只看本筆讀值，沒有時顯示「—」
     for (const e of extras) {
       const k = e.key.toLowerCase();
-      if (e.measured) cells.push(`<td class="m x"><b>${esc(e.key)}</b>${cellText(e.v, rec.raw[k], h)}</td>`);
+      if (e.measured) cells.push(`<td class="m x"><b>${esc(e.key)}</b>${cellText(e.v, rec.raw[k])}</td>`);
       else cells.push(`<td class="i x"><b>${esc(e.key)}</b>—</td>`);
     }
-    const sub = knownCount ? '' : ' <span class="warn">此半邊無量測，以全筆資料推估</span>';
+    const sub = knownCount ? '' : ' <span class="warn">此半邊無量測，沿用上方紀錄</span>';
     rows.push(`<tr><th colspan="4">${HALVES[half].label}${sub}</th></tr>`);
     for (let k = 0; k < cells.length; k += 4) rows.push(`<tr>${cells.slice(k, k + 4).join('')}</tr>`);
   }
